@@ -156,6 +156,24 @@ def make_solution(tiles: list[tuple[str, str]]) -> str:
             tuple(sorted(palette, key=weights.get, reverse=True)),
         }
     candidates: list[str] = []
+
+    def add_loop_candidates(
+        setup: str, color_expression: str, include_while: bool = False
+    ) -> None:
+        call = (
+            f"pydle(i%5,i//5,{character_expression},{color_expression})"
+        )
+        bodies = [f"for i in range(25):{call}"]
+        if include_while:
+            bodies.extend(
+                (
+                    f"i=25\nwhile i:i-=1;{call}",
+                    f"i=0\nwhile i<25:{call};i+=1",
+                )
+            )
+        for body in bodies:
+            candidates.append(f"{setup}\n{body}" if setup else body)
+
     for order in palette_orders:
         palette_indices = {color: index for index, color in enumerate(order)}
         colors = [palette_indices[color] for _, color in tiles]
@@ -165,19 +183,22 @@ def make_solution(tiles: list[tuple[str, str]]) -> str:
         )
         setup_options = [character_setup] if character_setup else [""]
         if len(order) == 1:
-            color_expression = repr(order[0])
+            color_expressions = {repr(order[0])}
+            if order[0] == "black":
+                color_expressions.add("0")
             for setup in setup_options:
-                body = (
-                    f"for i in range(25):pydle(i%5,i//5,"
-                    f"{character_expression},{color_expression})"
-                )
-                candidates.append(f"{setup}\n{body}" if setup else body)
+                for color_expression in color_expressions:
+                    add_loop_candidates(setup, color_expression)
             continue
 
         encoded_colors = "".join(str(color) for color in colors)
         bits = max(1, (len(order) - 1).bit_length())
         packed_colors = sum(color << (bits * i) for i, color in enumerate(colors))
-        packed_literals = {str(packed_colors), hex(packed_colors)}
+        packed_literals = {
+            str(packed_colors),
+            hex(packed_colors),
+            oct(packed_colors),
+        }
         for palette_code in palette_codes:
             for setup in setup_options:
                 for encoded in packed_literals:
@@ -186,26 +207,40 @@ def make_solution(tiles: list[tuple[str, str]]) -> str:
                     prefix = "\n".join(
                         part for part in (palette_code, setup, color_setup) if part
                     )
-                    body = (
-                        f"for i in range(25):pydle(i%5,i//5,"
-                        f"{character_expression},{color_expression})"
-                    )
-                    candidates.append(f"{prefix}\n{body}")
+                    add_loop_candidates(prefix, color_expression)
 
                 color_setup = f"s={compact_literal(encoded_colors)}"
                 color_expression = "c[int(s[i])]"
                 prefix = "\n".join(
                     part for part in (palette_code, setup, color_setup) if part
                 )
-                body = (
-                    f"for i in range(25):pydle(i%5,i//5,"
-                    f"{character_expression},{color_expression})"
-                )
-                candidates.append(f"{prefix}\n{body}")
+                add_loop_candidates(prefix, color_expression)
+
+        black_options = (False, True) if "black" in order else (False,)
+        for use_zero_for_black in black_options:
+            items = [
+                "0" if use_zero_for_black and color == "black" else repr(color)
+                for color in order
+            ]
+            inline_palettes = {
+                f"[{','.join(items)}]",
+                f"({','.join(items)})",
+            }
+            for inline_palette in inline_palettes:
+                for encoded in packed_literals:
+                    color_expression = (
+                        f"{inline_palette}[{encoded}>>i*{bits}&{(1 << bits) - 1}]"
+                    )
+                    for setup in setup_options:
+                        add_loop_candidates(setup, color_expression, True)
 
     code = min(
         candidates,
-        key=lambda candidate: (code_character_count(candidate), candidate),
+        key=lambda candidate: (
+            len(candidate),
+            code_character_count(candidate),
+            candidate,
+        ),
     )
     if code_character_count(code) > MAX_CODE_LENGTH:
         raise ValueError(
