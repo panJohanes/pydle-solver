@@ -158,21 +158,93 @@ def make_solution(tiles: list[tuple[str, str]]) -> str:
     candidates: list[str] = []
 
     def add_loop_candidates(
-        setup: str, color_expression: str, include_while: bool = False
+        setup: str,
+        color_expression: str,
+        character_expression_override: str | None = None,
     ) -> None:
-        call = (
-            f"pydle(i%5,i//5,{character_expression},{color_expression})"
+        selected_character_expression = (
+            character_expression_override or character_expression
         )
-        bodies = [f"for i in range(25):{call}"]
-        if include_while:
-            bodies.extend(
-                (
-                    f"i=25\nwhile i:i-=1;{call}",
-                    f"i=0\nwhile i<25:{call};i+=1",
-                )
-            )
+        call = (
+            f"pydle(i%5,i//5,{selected_character_expression},{color_expression})"
+        )
+        bodies = [
+            f"for i in range(25):{call}",
+            f"i=25\nwhile i:i-=1;{call}",
+            f"i=0\nwhile i<25:{call};i+=1",
+        ]
         for body in bodies:
             candidates.append(f"{setup}\n{body}" if setup else body)
+
+    character_options = [(character_setup, character_expression)]
+    if len(set(characters)) == 2:
+        for character_order in permutations(sorted(set(characters))):
+            character_bits = sum(
+                (character == character_order[1]) << index
+                for index, character in enumerate(characters)
+            )
+            encoded = min(
+                (str(character_bits), hex(character_bits), oct(character_bits)),
+                key=len,
+            )
+            character_options.append(
+                (
+                    "",
+                    f"{''.join(character_order)!r}[{encoded}>>i&1]",
+                )
+            )
+
+    if len(palette) == 2:
+        for color_order in permutations(palette):
+            interleaved_colors = "".join(
+                color[index]
+                for index in range(max(map(len, color_order)))
+                for color in color_order
+                if index < len(color)
+            )
+            color_bits = sum(
+                (color == color_order[1]) << index
+                for index, (_, color) in enumerate(tiles)
+            )
+            encoded = min(
+                (str(color_bits), hex(color_bits), oct(color_bits)),
+                key=len,
+            )
+            color_expression = f"{interleaved_colors!r}[{encoded}>>i&1::2]"
+            for setup, selected_character_expression in character_options:
+                add_loop_candidates(
+                    setup,
+                    color_expression,
+                    character_expression_override=selected_character_expression,
+                )
+
+        for boundary in range(1, len(tiles)):
+            first_color = tiles[0][1]
+            second_color = tiles[boundary][1]
+            if first_color == second_color:
+                continue
+            if not all(color == first_color for _, color in tiles[:boundary]):
+                continue
+            if not all(color == second_color for _, color in tiles[boundary:]):
+                continue
+
+            for color_order, selector in (
+                ((first_color, second_color), f"i>{boundary - 1}"),
+                ((second_color, first_color), f"i<{boundary}"),
+            ):
+                interleaved_colors = "".join(
+                    color[index]
+                    for index in range(max(map(len, color_order)))
+                    for color in color_order
+                    if index < len(color)
+                )
+                color_expression = f"{interleaved_colors!r}[{selector}::2]"
+                for setup, selected_character_expression in character_options:
+                    add_loop_candidates(
+                        setup,
+                        color_expression,
+                        character_expression_override=selected_character_expression,
+                    )
 
     for order in palette_orders:
         palette_indices = {color: index for index, color in enumerate(order)}
@@ -181,14 +253,17 @@ def make_solution(tiles: list[tuple[str, str]]) -> str:
             f"c={' '.join(order)!r}.split()",
             f"c={','.join(repr(color) for color in order)}",
         )
-        setup_options = [character_setup] if character_setup else [""]
         if len(order) == 1:
             color_expressions = {repr(order[0])}
             if order[0] == "black":
                 color_expressions.add("0")
-            for setup in setup_options:
+            for setup, selected_character_expression in character_options:
                 for color_expression in color_expressions:
-                    add_loop_candidates(setup, color_expression)
+                    add_loop_candidates(
+                        setup,
+                        color_expression,
+                        character_expression_override=selected_character_expression,
+                    )
             continue
 
         encoded_colors = "".join(str(color) for color in colors)
@@ -200,21 +275,29 @@ def make_solution(tiles: list[tuple[str, str]]) -> str:
             oct(packed_colors),
         }
         for palette_code in palette_codes:
-            for setup in setup_options:
+            for setup, selected_character_expression in character_options:
                 for encoded in packed_literals:
                     color_setup = f"b={encoded}"
                     color_expression = f"c[b>>i*{bits}&{(1 << bits) - 1}]"
                     prefix = "\n".join(
                         part for part in (palette_code, setup, color_setup) if part
                     )
-                    add_loop_candidates(prefix, color_expression)
+                    add_loop_candidates(
+                        prefix,
+                        color_expression,
+                        character_expression_override=selected_character_expression,
+                    )
 
                 color_setup = f"s={compact_literal(encoded_colors)}"
                 color_expression = "c[int(s[i])]"
                 prefix = "\n".join(
                     part for part in (palette_code, setup, color_setup) if part
                 )
-                add_loop_candidates(prefix, color_expression)
+                add_loop_candidates(
+                    prefix,
+                    color_expression,
+                    character_expression_override=selected_character_expression,
+                )
 
         black_options = (False, True) if "black" in order else (False,)
         for use_zero_for_black in black_options:
@@ -225,14 +308,20 @@ def make_solution(tiles: list[tuple[str, str]]) -> str:
             inline_palettes = {
                 f"[{','.join(items)}]",
                 f"({','.join(items)})",
+                f"{' '.join(order)!r}.split(' ')",
+                f"{' '.join(order)!r}.split()",
             }
             for inline_palette in inline_palettes:
                 for encoded in packed_literals:
                     color_expression = (
                         f"{inline_palette}[{encoded}>>i*{bits}&{(1 << bits) - 1}]"
                     )
-                    for setup in setup_options:
-                        add_loop_candidates(setup, color_expression, True)
+                    for setup, selected_character_expression in character_options:
+                        add_loop_candidates(
+                            setup,
+                            color_expression,
+                            character_expression_override=selected_character_expression,
+                        )
 
     code = min(
         candidates,
